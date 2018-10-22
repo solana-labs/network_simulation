@@ -2,6 +2,7 @@
 ## Network Sim
 ## 
 ## TODO
+## - update get_current_lockout using last *voted* block, not just block heights
 ## - pool size != network ticks
 ## - if leader is drop-out, no data in forks, need ability to 'request from network'
 ## - validate lockout calc
