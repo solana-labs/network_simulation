@@ -70,7 +70,7 @@ def run_simulation():
         if cur_partition_time == 0 :
             network.partition_nodes = list(compress(VALIDATOR_IDS,\
                                                 [np.random.uniform() < NETWORK_PARTITION for _ in nodes]))
-            cur_partition_time = randint(1,POOL_SIZE/10)
+            cur_partition_time = randint(1,POOL_SIZE/5)
         else:
             cur_partition_time -= 1
             

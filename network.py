@@ -36,7 +36,7 @@ def calc_lockout_time(current_time, prev_vote_time, k = 1, base = 2,
 
     z = (current_time - prev_vote_time) / k
     exp_z = k * (base ** (z + 1))
-    lockout_time = (min_lockout + exp_z)
+    lockout_time = int(min_lockout + exp_z)
 
     if lockout_time > max_lockout:
         lockout_time = max_lockout
@@ -175,7 +175,11 @@ class Block():
         if vote_time not in self.votes: ## first vote
             self.votes[vote_time] = [validator_id]
         else:
-            self.votes[vote_time].append(validator_id)
+            cur_votes = self.votes[vote_time]
+            if validator_id in cur_votes:
+                ValueError("Double voting on block? Maybe during rollback.")
+            else:
+                self.votes[vote_time].append(validator_id)
 
     def get_hash_chain(self):
         ## returns a dict of time:hashes of blocks connected to self, excluding current block
@@ -199,10 +203,10 @@ class Node():
         self.network = network
         network.nodes.append(self)
         # Received blocks
-        self.received = {network.genesis.hash: network.genesis}
-        self.chain = {0: network.genesis.hash} ## time:hash, helps keep self.received in order
-        self.lockouts = {network.genesis.hash, MIN_LOCKOUT} ## each node has lockouts attached to specific blocks/votes
-        self.forks = {0 : {0 : network.genesis}} ## {broadcast time : {last non-virtual block time, broadcast block}}
+        self.received = {network.genesis.hash : network.genesis}
+        self.chain = {0 : network.genesis.hash} ## time:hash, helps keep self.received in order
+        self.lockouts = {network.genesis.hash : MIN_LOCKOUT} ## lockouts assosiated with votes for blocks
+        self.cache = {0 : BlockTransmission(block = network.genesis, previous_ticks = [])}  ## when locked out, store current transmission
         
     def receive_block(self, block_transmission, time):
 
@@ -210,32 +214,96 @@ class Node():
             raise ValueError("Node ", self.id, " cannot accept block at height ", time)
 
 
-
         block = block_transmission.get_block()
         previous_ticks = block_transmission.get_previous_ticks()
         
-        ## time for which leader last saw data
-        last_block_time = time - (len(previous_ticks) + 1)
-
-        #       print((self.id, time))
-        ## 
-        lockout_time = self.get_current_lockout(block, time)
-        if lockout_time > time + 1: set_trace()
+        ## need to check if locked out
+        ## Locked out if i have a record of voting on a
+        ## transmission that isn't included in leader's broadcast,
+        ## and if any of my vote lockout times are past current PoH
         
-        ## if locked out, store broadcast block and ticks
-        ## write virtual block
-        if lockout_time > time:
-            ## Locked out from voting!
-            ## block, last_block_time
-            self.forks[time] = {last_block_time, block}
-#            print("Saving fork at %s with last block time %s due to lockout %s" % (time, last_block_time, lockout_time))
+        node_block_hashes = self.received.keys()
+        leader_hash_chain = block.get_hash_chain()
+
+        ## if I have any blocks that aren't in leader's block chain,
+        ## leader is broadcasting a branch
+        on_same_branch = all([node_block in leader_hash_chain.values() for node_block in node_block_hashes])
+
+
+        if not on_same_branch:
+
+            ## what is Node's maximum lockout on earliest
+            ## block not on leader branch
+            
+            lockout_time = self.get_current_lockout(block, time)
+            #max_lockout = max(self.lockouts.values())
+            
+            if lockout_time > time:
+                ## if locked out:  don't vote, don't update lockouts, store transmission
+                self.cache[time] = block_transmission
+                return
+            else:
+                ## switching branches
+                ## vote on latest block chain, fill in blocks if necessary from cache, register votes on all the blocks
+                ## re-write / fill in blocks from cache
+                ## Keep track of depth of rollback (E&M)
+                ## TODO: how to update lockouts?
+                rollback_depths = []
+                for t in self.chain.keys():
+
+                    ## only roll back blocks that are different
+                    if self.chain[t] == leader_hash_chain[t]:
+                        continue
+                    else:
+                        ## remove current block from received
+                        if self.chain[t] != 0: del self.received[self.chain[t]]
+                        self.chain[t] = leader_hash_chain[t]
+
+                        ## FIXME: optimize
+                        err_reassigned = False
+                        ## find block associated with that hash
+                        cur_leader_block = block
+                        while cur_leader_block != self.network.genesis:
+                            if cur_leader_block.hash == self.chain[t]:
+                                self.received[self.chain[t]] = cur_leader_block
+                                cur_leader_block.add_vote(t, self.id)
+                                err_reassigned = True
+                                break
+                            else:
+                                cur_leader_block = cur_leader_block.parent
+                        if not err_reassigned: ValueError("Block re-assignment failed during rollback!")
+                        rollback_depths.append(t)
+                print("Rollback depth: %s" % max(rollback_depths))
+
+                ## receive head block
+                self.received[block.hash] = block
+                self.chain[time] = block.hash
+                block.add_vote(time, self.id)
+
+                ## update lockouts
+                self.update_lockouts(time)
+                self.lockouts[block.hash] = time + MIN_LOCKOUT
+
         else:
-            ## TODO: check if we insert fork here
-            ## receive block and vote
+            ## same branch, vote, update lockouts
             self.received[block.hash] = block
             self.chain[time] = block.hash
             block.add_vote(time, self.id)
 
+            ## update lockouts
+            self.update_lockouts(time)
+            self.lockouts[block.hash] = time + MIN_LOCKOUT
+
+    def update_lockouts(self, time):
+        ## run through votes (blocks), re-calc lockouts with current time
+        ## re-writing lockouts entirely out of laziness
+        ## could deal with rollbacks much better
+        self.lockouts = {}
+        for block_hash in self.chain.values():
+            if block_hash == 0: continue
+            block_time = self.received[block_hash].block_time
+            self.lockouts[block_hash] = time + calc_lockout_time(time, block_time, k = 1.5)
+        
             
     def get_current_lockout(self, current_block, time):
         ## returns time when lockout on current branch expires
@@ -246,19 +314,29 @@ class Node():
         ## - find earliest (lowest PoH) block in Node chain not included in block transmission
         ## - if lockout from that block is <= (=?) current block slot (PoH) vote on currrent chain
 
+
+        ## FIXME: should chain history come from node, rather than block?
+        ## !! chain from block != chain on node
+        ## find last non virtual block
+        previous_node_hash_time = len(self.chain) - 1
+        for i in range(1, time + 1):
+            previous_node_hash = self.chain[time - i]
+            if previous_node_hash != 0:
+                break
+            else:
+                previous_node_hash_time -= 1
+
+        ## get chain history from last non-virtual block
+        #node_block_hashes = self.received[previous_node_hash].get_hash_chain()
+
+        node_block_hashes = {k: v for k, v in self.chain.iteritems() if k <= previous_node_hash_time}
+        
+
         ## Get history of blocks from current block
         ## Compare to history from Node's most up-to-date block
         current_block_hashes = current_block.get_hash_chain()
-
-        ## failing in self.chain[time - 1] == 0  (rather than a hash)
-        for i in range(1, time +1):
-            previous_node_hash = self.chain[time - i]
-            if previous_node_hash != 0: break
-
+#        current_block_hashes = {k: v for k, v in current_block_hashes.iteritems() if v != 0}
         
-        node_block_hashes = self.received[previous_node_hash].get_hash_chain()
-
-
         ## loop through time, up to previous block time
         prev_block_time = min([max(current_block_hashes.keys()),\
                                max(node_block_hashes.keys())])
@@ -267,16 +345,16 @@ class Node():
         ## i.e. find first slot where two block histories differ
         branch_time = -1
         for i in range(prev_block_time+1):
-            if node_block_hashes[i] != current_block_hashes[i]:
+            if node_block_hashes[i] != current_block_hashes[i] and node_block_hashes[i] != 0:
                 branch_time = i
                 break
 
         ## TODO: validate lockout 
         if branch_time < 0:
             ## same branch, no lockout
-            return time
+            return 0
         else:
-            return time + calc_lockout_time(time, branch_time)
+            return self.lockouts[self.chain[branch_time]]
 
     ## Node::tick
     def tick(self, _time):
