@@ -59,7 +59,7 @@ def run_simulation():
     ## Set network partition
     ## Currently static...
 
-    
+    network_status = solana.NetworkStatus()
 
 ##    logging.info("Partitioned nodes: ",network.partition_nodes)
     ## run sim...
@@ -76,6 +76,10 @@ def run_simulation():
             
         network.tick()
         network.status()
+
+
+        network_snapshot = network.snapshot(t)
+        network_status.print_snapshot(network_snapshot)
         
     return network
 

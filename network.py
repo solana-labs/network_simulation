@@ -1,6 +1,7 @@
 ######################################
 ## Simulating Solana branch consensus
 ## TODO
+## - reset block cache!
 ## - validate lockout calc
 ## - incorporate saved forks into chain
 ## - use virtual ticks when node received blokc
@@ -18,6 +19,11 @@ random.seed(11)
 import numpy as np
 np.random.seed(11)
 import pandas as pd
+
+#from graphviz import Digraph
+import pygraphviz as pgv
+
+from collections import Counter
 
 from IPython.core.debugger import set_trace
 
@@ -57,7 +63,8 @@ class Network():
         self.dropout_rate = 0.1
         self.partition_nodes = []
         self.genesis = genesis
-
+        self.active_set = len(self.nodes)
+        
     def status(self):
         ## quick summary of network status
 
@@ -65,25 +72,38 @@ class Network():
         node_heads = [node.chain[max(node.chain.keys())] for node in self.nodes]
         print("Node agreement: %d%%" % (100*(1 - float(len(set(node_heads))-1)/len(node_heads))))
         
-    def get_chains(self):
+    def snapshot(self, _time):
         ## DataFrame structure of node chains over time
+        print(_time)
 
-        chain_data = pd.DataFrame(index = range(len(self.nodes)))
+        chain_data = {}
+        for i, node in enumerate(self.nodes):
+            branch_chain = {}
 
-        for t in range(self.time)[:-1]:
-            ## get block hashes from each node at t
-            ## drop last slot because may have nodes
-            ## with missing blocks from dropouts
+            ## is latest block virtual
+            if node.chain[_time] == 0:
+                ## branch chain 
+                branch_chain = {int(k):str(v.get_block().hash) for k,v in node.cache.items()}
+
+            chain = {int(k):str(v) for k,v in node.chain.items() if k not in branch_chain}
+            chain = dict(chain.items() + branch_chain.items())
+                
+##            if node.chain[_time] == 0:
+##                ## virtual tick, get cached blocks
+##                t_ctr = _time
+##                while node.chain[t_ctr] == 0:
+##                    if t_ctr in node.cache:
+##                        branch_chain[t_ctr] = str(node.cache[t_ctr].get_block().hash)
+##                    else:
+##                        branch_chain[t_ctr] = str(0)
+##                    t_ctr -= 1
+                    
+##                chain = {int(k):str(v) for k,v in node.chain.items() if v != 0}
+                
+            chain_data[i] = chain
             
-            current_blocks = []
-            for i, node in enumerate(self.nodes):
-                ### TODO: bug here due to dropouts not having slot data
-                if t == 1 and i == 191: set_trace() 
-                current_blocks.append(str(node.chain[t]))
-            chain_data[t] = pd.Series(current_blocks, index = chain_data.index)
-        chain_data.index.name = 'Node'
-        chain_data.columns.name = 'Time'
-        return(chain_data)
+        return(pd.DataFrame(chain_data))
+
 
     def broadcast(self, block_transmission):
         ## Called by leader node to transmit block to rest of network
@@ -112,6 +132,9 @@ class Network():
         ## TODO: partitioned nodes not currently separate network
         ##       they just miss any broadcasts currently
 
+        ## PLACEHOLDER: set active set
+        self.active_set = len(self.nodes)
+        
         if self.time in self.msg_arrivals: ## messages to be sent
             for node_index, block_transmission in self.msg_arrivals[self.time]:
                 if node_index not in self.partition_nodes: ## partitioned from receiving?
@@ -121,7 +144,7 @@ class Network():
 #        for node in self.nodes:
 #            logging.debug("Node %s received: %s" % (node.id, node.chain[max(node.chain.keys())]))
 
-        ## not ideal,  keep for now
+        ## not ideal
         for node in self.nodes:
             ## if no data was transmiktted
             ## add virtual tick to chain
@@ -206,14 +229,19 @@ class Node():
         self.received = {network.genesis.hash : network.genesis}
         self.chain = {0 : network.genesis.hash} ## time:hash, helps keep self.received in order
         self.lockouts = {network.genesis.hash : MIN_LOCKOUT} ## lockouts assosiated with votes for blocks
-        self.cache = {0 : BlockTransmission(block = network.genesis, previous_ticks = [])}  ## when locked out, store current transmission
+        self.cache = {} ##{0 : BlockTransmission(block = network.genesis, previous_ticks = [])}  ## when locked out, store current transmission
+        self.finalized = {0 : network.genesis} ## TESTING - store finalized blocks when observes 2/3 votes
+        self.active_set = {0 : network.active_set}
         
     def receive_block(self, block_transmission, time):
 
         if time <= max(self.chain.keys()): ## latest time
             raise ValueError("Node ", self.id, " cannot accept block at height ", time)
 
+        ## save active set for future finality calcs
+        self.active_set[time] = self.network.active_set
 
+        
         block = block_transmission.get_block()
         previous_ticks = block_transmission.get_previous_ticks()
         
@@ -229,7 +257,6 @@ class Node():
         ## leader is broadcasting a branch
         on_same_branch = all([node_block in leader_hash_chain.values() for node_block in node_block_hashes])
 
-
         if not on_same_branch:
 
             ## what is Node's maximum lockout on earliest
@@ -237,7 +264,7 @@ class Node():
             
             lockout_time = self.get_current_lockout(block, time)
             #max_lockout = max(self.lockouts.values())
-            
+
             if lockout_time > time:
                 ## if locked out:  don't vote, don't update lockouts, store transmission
                 self.cache[time] = block_transmission
@@ -283,6 +310,9 @@ class Node():
                 ## update lockouts
                 self.update_lockouts(time)
                 self.lockouts[block.hash] = time + MIN_LOCKOUT
+
+                ## clear cache
+                self.cache = {}
 
         else:
             ## same branch, vote, update lockouts
@@ -388,9 +418,39 @@ class Node():
             ## self.receive_block(new_block, _time)
 
 class NetworkStatus():
-    ## TODO: incomplete class
-    def __init__(self, chain):
-        self.chain = chain
 
-    def print_network_status(self):
-        print(self.chain)
+    def print_snapshot(self, snapshot):
+        ## snapshot of form {validator : {slot : block}}
+        ## print tree of current network chain status
+        ## nodes show % votes
+        ## Nodes are blocks, edges time between block, labels are vote counts/% across given slot
+
+        g = pgv.AGraph(strict = True, directed = True)
+
+        edge_ctr = {}
+
+        for col_num in range(snapshot.shape[1]):
+
+            cur_edges = zip(snapshot[col_num].tolist(),
+                            snapshot[col_num].tolist()[1:])
+
+            for t, cur_edge in enumerate(cur_edges):
+                ##ce = ["{}... T={}".format(node[:5],t) for node in cur_edge]
+                ## converting to hex, display with slot time
+                ## hacky way to avoid self loops (e.g. 0 -> 0)
+
+                ce = tuple(["{}... T={}".format(format(int(node),'02x')[:5], t + i) for i, node in enumerate(cur_edge)])                
+                if ce in edge_ctr:
+                    edge_ctr[ce] += 1
+                else:
+                    edge_ctr[ce] = 1
+
+                #if g.get_edge(cur_edge)
+                ## t is key to identify time
+                g.add_edge(ce[0], ce[1], str(t), weight = edge_ctr[ce])
+                           
+        if snapshot.shape[0] == 8: set_trace()
+        print(g)
+        g.layout(prog = "dot")
+        network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0])
+        g.draw(network_file_name+".png")
