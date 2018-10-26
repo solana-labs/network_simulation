@@ -19,10 +19,9 @@ random.seed(11)
 import numpy as np
 np.random.seed(11)
 import pandas as pd
-
+import hashlib
 #from graphviz import Digraph
 import pygraphviz as pgv
-
 from collections import Counter
 
 from IPython.core.debugger import set_trace
@@ -81,7 +80,6 @@ class Network():
 
             ## is latest block virtual
             if node.chain[_time] == 0 and len(node.cache) > 0:
-                set_trace()
                 ## branch chain 
                 branch_chain = {int(k):str(v.get_block().hash) for k,v in node.cache.items()}
 
@@ -249,6 +247,7 @@ class Node():
         ## leader is broadcasting a branch
         on_same_branch = all([node_block in leader_hash_chain.values() for node_block in node_block_hashes])
 
+        
         if not on_same_branch:
 
             ## what is Node's maximum lockout on earliest
@@ -301,12 +300,13 @@ class Node():
 
                 ## update lockouts
                 self.update_lockouts(time)
-                self.lockouts[block.hash] = time + MIN_LOCKOUT
+                ##self.lockouts[block.hash] = time + MIN_LOCKOUT ## block added and updated abov e
 
                 ## clear cache
                 self.cache = {}
 
         else:
+            
             ## same branch, vote, update lockouts
             self.received[block.hash] = block
             self.chain[time] = block.hash
@@ -314,7 +314,7 @@ class Node():
 
             ## update lockouts
             self.update_lockouts(time)
-            self.lockouts[block.hash] = time + MIN_LOCKOUT
+            ##self.lockouts[block.hash] = time + MIN_LOCKOUT ## block added and updated abov e
 
     def update_lockouts(self, time):
         ## run through votes (blocks), re-calc lockouts with current time
@@ -383,6 +383,7 @@ class Node():
 
         ## leader:
         if self.network.round_robin[_time] == self.id:
+
             logging.debug("I'm the leader! Node: %s at time: %s" % (self.id, _time))
 
             ## find last slot time with block (not ticks)
@@ -436,27 +437,45 @@ class NetworkStatus():
 
         for col_num in range(snapshot.shape[1]):
 
-            cur_edges = zip(snapshot[col_num].tolist(),
-                            snapshot[col_num].tolist()[1:])
+            cur_snapshot = snapshot[col_num]
+            ## create node ids 
+            ## node IDs should be hash of all blocks in it's history --> unique branches
+            block_hashes = []
+            for i, block in enumerate(cur_snapshot):
+                cur_block_hash = str(block)+'-'+'-'.join(cur_snapshot[:i])
+                cur_block_hash = hashlib.sha256(cur_block_hash).hexdigest()
+                block_hashes.append(cur_block_hash)
 
+            cur_edges = zip(block_hashes, block_hashes[1:])
+            
             for t, cur_edge in enumerate(cur_edges):
                 ##ce = ["{}... T={}".format(node[:5],t) for node in cur_edge]
                 ## converting to hex, display with slot time
                 ## hacky way to avoid self loops (e.g. 0 -> 0)
 
-                ce = tuple(["{}... T={}".format(format(int(node),'02x')[:5], t + i) for i, node in enumerate(cur_edge)])                
+                
+                ce = tuple(["{}... T={}".format(node[:5], t + i) for i, node in enumerate(cur_edge)])
+                #ce = tuple(["{}... T={}".format(format(int(node),'02x')[:5], t + i) for i, node in enumerate(cur_edge)])                
                 if ce in edge_ctr:
                     edge_ctr[ce] += 1
                 else:
                     edge_ctr[ce] = 1
 
+                ## add weight label
+ #               tmp_ce = ce
+#                ce = tuple('{}, W = {}'.format(t, edge_ctr[tmp_ce]) for t in ce)
                 if len(ce) > 2: set_trace()
                 
                 #if g.get_edge(cur_edge)
                 ## t is key to identify time
+                g.add_node(ce[0])
+                g.add_node(ce[1])
                 g.add_edge(ce[0], ce[1], str(t), weight = edge_ctr[ce])
                            
         print(g)
+  
         g.layout(prog = "dot")
         network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0])
         g.draw(network_file_name+".png")
+
+

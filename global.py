@@ -20,6 +20,8 @@ reload(solana)
 
 from random import randint
 
+from collections import Counter
+
 import numpy as np
 np.random.seed(11)
 from itertools import compress
@@ -52,6 +54,7 @@ def run_simulation():
     ## Attach nodes to network
     nodes = [solana.Node(network, i) for i in VALIDATOR_IDS]
 
+
     ## Assign leader rotration
     leaders = np.random.choice(VALIDATOR_IDS, POOL_SIZE, replace = False)
     network.round_robin = leaders
@@ -74,15 +77,19 @@ def run_simulation():
         else:
             cur_partition_time -= 1
 
-        if t == 8: set_trace() ## majority partitioned leader at t = 7
-
+        
         network.tick()
         network.status()
 
+        n_branches = len(Counter([str(node.chain) for node in network.nodes]))
+        print("# of branches: %s:" % n_branches)
 
+        
         network_snapshot = network.snapshot(t)
 
         network_status.print_snapshot(network_snapshot)
+
+##        print("%s: %s"  % (t, str(set([n.chain[0] for n in network.nodes]))))
         
     return network
 
