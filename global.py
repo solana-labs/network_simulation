@@ -73,12 +73,15 @@ def run_simulation():
             cur_partition_time = randint(1,POOL_SIZE/5)
         else:
             cur_partition_time -= 1
-            
+
+        if t == 8: set_trace() ## majority partitioned leader at t = 7
+
         network.tick()
         network.status()
 
 
         network_snapshot = network.snapshot(t)
+
         network_status.print_snapshot(network_snapshot)
         
     return network

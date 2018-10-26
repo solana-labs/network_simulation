@@ -75,50 +75,39 @@ class Network():
     def snapshot(self, _time):
         ## DataFrame structure of node chains over time
         print(_time)
-
         chain_data = {}
         for i, node in enumerate(self.nodes):
             branch_chain = {}
 
             ## is latest block virtual
-            if node.chain[_time] == 0:
+            if node.chain[_time] == 0 and len(node.cache) > 0:
+                set_trace()
                 ## branch chain 
                 branch_chain = {int(k):str(v.get_block().hash) for k,v in node.cache.items()}
 
             chain = {int(k):str(v) for k,v in node.chain.items() if k not in branch_chain}
             chain = dict(chain.items() + branch_chain.items())
                 
-##            if node.chain[_time] == 0:
-##                ## virtual tick, get cached blocks
-##                t_ctr = _time
-##                while node.chain[t_ctr] == 0:
-##                    if t_ctr in node.cache:
-##                        branch_chain[t_ctr] = str(node.cache[t_ctr].get_block().hash)
-##                    else:
-##                        branch_chain[t_ctr] = str(0)
-##                    t_ctr -= 1
-                    
-##                chain = {int(k):str(v) for k,v in node.chain.items() if v != 0}
-                
             chain_data[i] = chain
-            
+
         return(pd.DataFrame(chain_data))
 
 
-    def broadcast(self, block_transmission):
+    def broadcast(self, block_transmission, broadcast_nodes):
         ## Called by leader node to transmit block to rest of network
 
+        ## replace with msg.block_time?
+        ## send to next slot
+        next_step = self.time + 1
 
         logging.debug("Leader broadcast: %s" % (block_transmission.get_block().hash))
         
         for i, current_node in enumerate(self.nodes):
 
+            if current_node.id not in broadcast_nodes:
+                continue
             ## TMP: ignore delay
             ## delay = self.latency()
-
-            ## replace with msg.block_time?
-            ## send to next slot
-            next_step = self.time + 1
 
             if next_step not in self.msg_arrivals:
                 self.msg_arrivals[next_step] = []
@@ -141,11 +130,13 @@ class Network():
                     self.nodes[node_index].receive_block(block_transmission, self.time)
             del self.msg_arrivals[self.time]
 
-#        for node in self.nodes:
-#            logging.debug("Node %s received: %s" % (node.id, node.chain[max(node.chain.keys())]))
+##        for node in self.nodes:
+##            logging.debug("Node %s received: %s" % (node.id, node.chain[max(node.chain.keys())]))
+
 
         ## not ideal
         for node in self.nodes:
+            if self.time == 7 and node.id == 38: set_trace()
             ## if no data was transmiktted
             ## add virtual tick to chain
             if self.time not in node.chain:
@@ -181,8 +172,9 @@ class BlockTransmission():
 
         
 class Block():
-    def __init__(self, initial_validator_set = [], parent=None, created_by = None, created_at = 0):
-        self.hash = random.randrange(10**30)
+    def __init__(self, initial_validator_set = [], parent=None, created_by = None, created_at = 0, nonce = ''):
+        #self.hash = random.randrange(10**30)
+        self.hash = abs(hash(str(random.randrange(10**30)) + nonce))
         self.parent = parent
         self.block_time = created_at
         if not self.parent: ## must be genesis
@@ -253,6 +245,7 @@ class Node():
         node_block_hashes = self.received.keys()
         leader_hash_chain = block.get_hash_chain()
 
+        
         ## if I have any blocks that aren't in leader's block chain,
         ## leader is broadcasting a branch
         on_same_branch = all([node_block in leader_hash_chain.values() for node_block in node_block_hashes])
@@ -397,7 +390,9 @@ class Node():
             last_block_time = max([block_time for block_time, block in self.chain.items() if block > 0])
 
             # to be delived in next round
-            new_block = Block(parent = self.received[self.chain[last_block_time]], created_by = self.id, created_at = _time +1) 
+            ## need to change hash to block from cache?
+            new_block = Block(parent = self.received[self.chain[last_block_time]], created_by = self.id,
+                              created_at = _time +1, nonce = str(self.chain[last_block_time]))
 
 
             ## bundle times of last N ticks (0s)
@@ -409,10 +404,21 @@ class Node():
                     break
 
             new_block_transmission = BlockTransmission(block = new_block, previous_ticks = previous_ticks)
+
+
+            ## determine what nodes to broadcast to
+            ## i.e. broadcast only to leader partition
+
+            current_partition = self.network.partition_nodes
+
+            broadcast_partition = [node.id for node in self.network.nodes if node.id not in current_partition] ## TODO use active_set    
+            if self.id in current_partition:
+                brodcast_partition = current_partition
+                
             ## generate delays and send to msg_arrivals of network
             ## to be received by network in _time + 1
-
-            self.network.broadcast(new_block_transmission)
+            set_trace()
+            self.network.broadcast(new_block_transmission, broadcast_partition)
 
             ## TODO: does leader receive now?
             ## self.receive_block(new_block, _time)
@@ -445,11 +451,12 @@ class NetworkStatus():
                 else:
                     edge_ctr[ce] = 1
 
+                if len(ce) > 2: set_trace()
+                
                 #if g.get_edge(cur_edge)
                 ## t is key to identify time
                 g.add_edge(ce[0], ce[1], str(t), weight = edge_ctr[ce])
                            
-        if snapshot.shape[0] == 8: set_trace()
         print(g)
         g.layout(prog = "dot")
         network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0])
