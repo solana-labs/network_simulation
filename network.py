@@ -126,7 +126,6 @@ class Network():
         
         if self.time in self.msg_arrivals: ## messages to be sent
             for node_index, block_transmission in self.msg_arrivals[self.time]:
-                if node_index not in self.partition_nodes: ## partitioned from receiving?
                     self.nodes[node_index].receive_block(block_transmission, self.time)
             del self.msg_arrivals[self.time]
 
@@ -136,7 +135,7 @@ class Network():
 
         ## not ideal
         for node in self.nodes:
-            if self.time == 7 and node.id == 38: set_trace()
+
             ## if no data was transmiktted
             ## add virtual tick to chain
             if self.time not in node.chain:
@@ -411,13 +410,13 @@ class Node():
 
             current_partition = self.network.partition_nodes
 
-            broadcast_partition = [node.id for node in self.network.nodes if node.id not in current_partition] ## TODO use active_set    
+            broadcast_partition = [node.id for node in self.network.nodes if node.id not in current_partition] ## TODO use active_set
+#            if _time == 7: set_trace()
             if self.id in current_partition:
-                brodcast_partition = current_partition
+                broadcast_partition = current_partition
                 
             ## generate delays and send to msg_arrivals of network
             ## to be received by network in _time + 1
-            set_trace()
             self.network.broadcast(new_block_transmission, broadcast_partition)
 
             ## TODO: does leader receive now?
