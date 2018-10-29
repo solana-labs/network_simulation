@@ -257,8 +257,10 @@ class Node():
 
             ## what is Node's maximum lockout on earliest
             ## block not on leader branch
+
+            branch_time = self.get_branch_split_time(block, time)
+            lockout_time = self.get_current_lockout(branch_time)
             
-            lockout_time, branch_time = self.get_current_lockout(block, time)
             #max_lockout = max(self.lockouts.values())
 
             if lockout_time > time:
@@ -375,15 +377,8 @@ class Node():
             block_time = self.received[block_hash].block_time
             self.lockouts[block_hash] = time + calc_lockout_time(time, block_time, k = 1.5)
         
-            
-    def get_current_lockout(self, current_block, time):
-        ## returns time when lockout on current branch expires
-        ## e.g. if current_time < lockout time,  voting on leader block/branch is slashable
-        ##  curent_time => lockout time: okay to vote on leader block/branch
-        ##  
-        ## lockout alg:
-        ## - find earliest (lowest PoH) block in Node chain not included in block transmission
-        ## - if lockout from that block is <= (=?) current block slot (PoH) vote on currrent chain
+
+    def get_branch_split_time(self, current_block, time):
 
 
         ## FIXME: should chain history come from node, rather than block?
@@ -401,7 +396,6 @@ class Node():
         #node_block_hashes = self.received[previous_node_hash].get_hash_chain()
 
         node_block_hashes = {k: v for k, v in self.chain.iteritems() if k <= previous_node_hash_time}
-        
 
         ## Get history of blocks from current block
         ## Compare to history from Node's most up-to-date block
@@ -419,13 +413,24 @@ class Node():
             if node_block_hashes[i] != current_block_hashes[i] and node_block_hashes[i] != 0:
                 branch_time = i
                 break
+        return branch_time
+            
+    def get_current_lockout(self, branch_time):
 
+        ## returns time when lockout on current branch expires
+        ## e.g. if current_time < lockout time,  voting on leader block/branch is slashable
+        ##  curent_time => lockout time: okay to vote on leader block/branch
+        ##  
+        ## lockout alg:
+        ## - find earliest (lowest PoH) block in Node chain not included in block transmission
+        ## - if lockout from that block is <= (=?) current block slot (PoH) vote on currrent chain
+        
         ## TODO: validate lockout 
         if branch_time < 0:
             ## same branch, no lockout
             return 0
         else:
-            return self.lockouts[self.chain[branch_time]], branch_time
+            return self.lockouts[self.chain[branch_time]]
 
     ## Node::tick
     def tick(self, _time):
