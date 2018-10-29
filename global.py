@@ -26,7 +26,10 @@ import numpy as np
 np.random.seed(11)
 from itertools import compress
 
+## DEBUG
 from IPython.core.debugger import set_trace
+import time
+
 
 ########################
 ## Network Constants
@@ -46,7 +49,7 @@ def poisson_latency(latency):
 ## Sim
 ########################
 def run_simulation():
-
+    
     ## Config network
     GENESIS = solana.Block(initial_validator_set = VALIDATOR_IDS)
     network = solana.Network(poisson_latency(AVG_LATENCY), GENESIS)
@@ -67,6 +70,7 @@ def run_simulation():
 ##    logging.info("Partitioned nodes: ",network.partition_nodes)
     ## run sim...
     cur_partition_time = 0
+    network.partition_nodes = []
     for t in range(POOL_SIZE):
 
         ## generate partitions
@@ -77,26 +81,27 @@ def run_simulation():
         else:
             cur_partition_time -= 1
 
-        
+        print("Partition size: %s for: %s" % (len(network.partition_nodes), cur_partition_time))
+
+##        if t >= 7: set_trace()        
         network.tick()
         network.status()
 
-        n_branches = len(Counter([str(node.chain) for node in network.nodes]))
-        print("# of branches: %s:" % n_branches)
-
-        
+##        if t >= 7: set_trace()
         network_snapshot = network.snapshot(t)
-
         network_status.print_snapshot(network_snapshot)
-
-##        print("%s: %s"  % (t, str(set([n.chain[0] for n in network.nodes]))))
+        
         
     return network
 
+
 def main():
     print("Run simulation...")
+    t0 = time.time()
     network = run_simulation()
-    ## network.print_network_status()
+    t1 = time.time()
+    print("Simulation time: %.2f" % (t1 - t0))
+
 
 if __name__ == '__main__':
     main()

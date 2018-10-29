@@ -15,9 +15,9 @@
 ######################################
 
 import random
-random.seed(11)
+random.seed(111)
 import numpy as np
-np.random.seed(11)
+np.random.seed(111)
 import pandas as pd
 import hashlib
 #from graphviz import Digraph
@@ -59,7 +59,7 @@ class Network():
         self.transmission_time = 1e6 # currently >> than latency
         self.time = 0
         self.msg_arrivals = {}
-        self.dropout_rate = 0.1
+        self.dropout_rate = 0.01
         self.partition_nodes = []
         self.genesis = genesis
         self.active_set = len(self.nodes)
@@ -73,21 +73,25 @@ class Network():
         
     def snapshot(self, _time):
         ## DataFrame structure of node chains over time
-        print(_time)
+        print("Tick: %d" %_time)
         chain_data = {}
         for i, node in enumerate(self.nodes):
             branch_chain = {}
 
             ## is latest block virtual
-            if node.chain[_time] == 0 and len(node.cache) > 0:
-                ## branch chain 
-                branch_chain = {int(k):str(v.get_block().hash) for k,v in node.cache.items()}
+            ## Replace virtual blocks with cached
+##            if node.chain[_time] == 0 and len(node.cache) > 0:
+##                ## branch chain 
+##                branch_chain = {int(k):str(v.get_block().hash) for k,v in node.cache.items()}
 
             chain = {int(k):str(v) for k,v in node.chain.items() if k not in branch_chain}
             chain = dict(chain.items() + branch_chain.items())
-                
+
             chain_data[i] = chain
 
+        n_branches = len(Counter([str(cd.values()) for cd in chain_data.values()]))
+        print("# of branches: %s:" % n_branches)
+        
         return(pd.DataFrame(chain_data))
 
 
@@ -119,17 +123,18 @@ class Network():
         ## TODO: partitioned nodes not currently separate network
         ##       they just miss any broadcasts currently
 
+        
         ## PLACEHOLDER: set active set
         self.active_set = len(self.nodes)
         
         if self.time in self.msg_arrivals: ## messages to be sent
             for node_index, block_transmission in self.msg_arrivals[self.time]:
+                if np.random.uniform() > self.dropout_rate:
                     self.nodes[node_index].receive_block(block_transmission, self.time)
             del self.msg_arrivals[self.time]
 
 ##        for node in self.nodes:
 ##            logging.debug("Node %s received: %s" % (node.id, node.chain[max(node.chain.keys())]))
-
 
         ## not ideal
         for node in self.nodes:
@@ -171,8 +176,9 @@ class BlockTransmission():
 class Block():
     def __init__(self, initial_validator_set = [], parent=None, created_by = None, created_at = 0, nonce = ''):
         #self.hash = random.randrange(10**30)
-        self.hash = abs(hash(str(random.randrange(10**30)) + nonce))
         self.parent = parent
+        self.hash = hashlib.sha256(str(random.randrange(10**30)) if parent is None else str(random.randrange(10**30)) + parent.hash).hexdigest()
+        
         self.block_time = created_at
         if not self.parent: ## must be genesis
             self.prevhash = 0
@@ -241,7 +247,6 @@ class Node():
         
         node_block_hashes = self.received.keys()
         leader_hash_chain = block.get_hash_chain()
-
         
         ## if I have any blocks that aren't in leader's block chain,
         ## leader is broadcasting a branch
@@ -253,11 +258,12 @@ class Node():
             ## what is Node's maximum lockout on earliest
             ## block not on leader branch
             
-            lockout_time = self.get_current_lockout(block, time)
+            lockout_time, branch_time = self.get_current_lockout(block, time)
             #max_lockout = max(self.lockouts.values())
 
             if lockout_time > time:
-                ## if locked out:  don't vote, don't update lockouts, store transmission
+                ## if locked out:  don't vote, don't update lockouts, store transmission,
+                ## virtual ticks stored later
                 self.cache[time] = block_transmission
                 return
             else:
@@ -266,11 +272,12 @@ class Node():
                 ## re-write / fill in blocks from cache
                 ## Keep track of depth of rollback (E&M)
                 ## TODO: how to update lockouts?
-                rollback_depths = []
+                rollback_times = []
                 for t in self.chain.keys():
 
                     ## only roll back blocks that are different
-                    if self.chain[t] == leader_hash_chain[t]:
+                    ## and that are sooner than split point (branch_time
+                    if self.chain[t] == leader_hash_chain[t] or t < branch_time:
                         continue
                     else:
                         ## remove current block from received
@@ -280,18 +287,19 @@ class Node():
                         ## FIXME: optimize
                         err_reassigned = False
                         ## find block associated with that hash
-                        cur_leader_block = block
-                        while cur_leader_block != self.network.genesis:
-                            if cur_leader_block.hash == self.chain[t]:
-                                self.received[self.chain[t]] = cur_leader_block
-                                cur_leader_block.add_vote(t, self.id)
-                                err_reassigned = True
-                                break
-                            else:
-                                cur_leader_block = cur_leader_block.parent
-                        if not err_reassigned: ValueError("Block re-assignment failed during rollback!")
-                        rollback_depths.append(t)
-                print("Rollback depth: %s" % max(rollback_depths))
+                        if self.chain[t] != 0:
+                            cur_leader_block = block
+                            while cur_leader_block != self.network.genesis:
+                                if cur_leader_block.hash == self.chain[t]:
+                                    self.received[self.chain[t]] = cur_leader_block
+                                    cur_leader_block.add_vote(t, self.id)
+                                    err_reassigned = True
+                                    break
+                                else:
+                                    cur_leader_block = cur_leader_block.parent
+                            if not err_reassigned: ValueError("Block re-assignment failed during rollback!")
+                        rollback_times.append(t)
+                print("Rollback depth: %s at time: %s for node: %s" % (min(rollback_times), time, self.id))
 
                 ## receive head block
                 self.received[block.hash] = block
@@ -306,11 +314,52 @@ class Node():
                 self.cache = {}
 
         else:
+
+            ## all of the blocks in the node's chain
+            ## are contained in the leader chain
+            ## backfill node branch w/ leader branch to last matched
+            ## 
+
+            ## find deepest slot to replace
+            ## either be virtual tick or current slot
+
+            ## FIXME: shoudn't be any/all virtual slots, just those sense last shared block
+            ## -- must be easier way
+
+            ## find last non-virtual node block
+            last_node_block_slot = max(self.chain.keys())
+
+            while self.chain[last_node_block_slot] == 0: 
+                last_node_block_slot -= 1
+            last_node_block_slot += 1
             
-            ## same branch, vote, update lockouts
-            self.received[block.hash] = block
-            self.chain[time] = block.hash
-            block.add_vote(time, self.id)
+            ## fill with leader blocks
+            while last_node_block_slot <= time:
+
+                    replacement_hash = leader_hash_chain[last_node_block_slot]
+
+                    if replacement_hash != 0:
+
+                        ## get block (request from network)
+                        replacement_block = block
+
+                        if replacement_block.hash != replacement_hash:
+                            leader_parent_block = block.parent
+                            while leader_parent_block is not None:
+                                if leader_parent_block.hash == replacement_hash:
+                                    replacement_block = leader_parent_block
+                                    break
+                                else:
+                                    leader_parent_block = leader_parent_block.parent
+
+                        if replacement_block is None:
+                            ValueError("Replacement block not found!")
+                    
+                        self.received[replacement_block.hash] = replacement_block
+                        block.add_vote(last_node_block_slot, self.id)
+
+                    self.chain[last_node_block_slot] = replacement_hash
+                    last_node_block_slot += 1
 
             ## update lockouts
             self.update_lockouts(time)
@@ -376,7 +425,7 @@ class Node():
             ## same branch, no lockout
             return 0
         else:
-            return self.lockouts[self.chain[branch_time]]
+            return self.lockouts[self.chain[branch_time]], branch_time
 
     ## Node::tick
     def tick(self, _time):
@@ -391,8 +440,10 @@ class Node():
 
             # to be delived in next round
             ## need to change hash to block from cache?
+
             new_block = Block(parent = self.received[self.chain[last_block_time]], created_by = self.id,
-                              created_at = _time +1, nonce = str(self.chain[last_block_time]))
+                              created_at = _time + 1)# nonce = str(self.chain[last_block_time]))
+
 
 
             ## bundle times of last N ticks (0s)
@@ -430,52 +481,62 @@ class NetworkStatus():
         ## print tree of current network chain status
         ## nodes show % votes
         ## Nodes are blocks, edges time between block, labels are vote counts/% across given slot
-
+        
+        if snapshot.shape[0] < 2: return
+        
         g = pgv.AGraph(strict = True, directed = True)
 
         edge_ctr = {}
-
+        branch_ctr = {}
         for col_num in range(snapshot.shape[1]):
 
+
             cur_snapshot = snapshot[col_num]
+
+
             ## create node ids 
             ## node IDs should be hash of all blocks in it's history --> unique branches
-            block_hashes = []
-            for i, block in enumerate(cur_snapshot):
-                cur_block_hash = str(block)+'-'+'-'.join(cur_snapshot[:i])
-                cur_block_hash = hashlib.sha256(cur_block_hash).hexdigest()
-                block_hashes.append(cur_block_hash)
 
-            cur_edges = zip(block_hashes, block_hashes[1:])
+#            block_hashes = []
+#            for i, block in enumerate(cur_snapshot):
+#                if block == '0':
+#                    block_hashes.append('0')
+#                else:
+#                    cur_block_hash = block+'-'+'-'.join(cur_snapshot[:i])
+#                    cur_block_hash = hashlib.sha256(cur_block_hash).hexdigest()
+#                    block_hashes.append(cur_block_hash)
+
+#            cur_edges = zip(block_hashes, block_hashes[1:])
+            
+            cur_edges = zip(cur_snapshot, cur_snapshot[1:])
+
+            ## count branch
+            branch_ctr[tuple(cur_edges)] = 1 if tuple(cur_edges) not in branch_ctr else branch_ctr[tuple(cur_edges)] + 1
             
             for t, cur_edge in enumerate(cur_edges):
                 ##ce = ["{}... T={}".format(node[:5],t) for node in cur_edge]
                 ## converting to hex, display with slot time
                 ## hacky way to avoid self loops (e.g. 0 -> 0)
-
                 
                 ce = tuple(["{}... T={}".format(node[:5], t + i) for i, node in enumerate(cur_edge)])
-                #ce = tuple(["{}... T={}".format(format(int(node),'02x')[:5], t + i) for i, node in enumerate(cur_edge)])                
                 if ce in edge_ctr:
                     edge_ctr[ce] += 1
                 else:
                     edge_ctr[ce] = 1
 
                 ## add weight label
- #               tmp_ce = ce
-#                ce = tuple('{}, W = {}'.format(t, edge_ctr[tmp_ce]) for t in ce)
-                if len(ce) > 2: set_trace()
-                
-                #if g.get_edge(cur_edge)
                 ## t is key to identify time
-                g.add_node(ce[0])
-                g.add_node(ce[1])
-                g.add_edge(ce[0], ce[1], str(t), weight = edge_ctr[ce])
-                           
-        print(g)
-  
+                g.add_edge(ce[0], ce[1], str(t),
+                           weight = edge_ctr[ce],
+                           label = "{0:.0%}".format(1.*edge_ctr[ce]/snapshot.shape[1]))
+                
+##        for e in range(len(g.edges())):
+##            g.get_edge(g.edges()[e][0],g.edges()[e][1]).attr["label"] = 1.*edge_ctr[g.get_edge(g.edges()[e][0],g.edges()[e][1])]/sum(edge_ctr.values())
+
+        ##print(g)
+
         g.layout(prog = "dot")
-        network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0])
+        network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0]-1)
         g.draw(network_file_name+".png")
 
 
