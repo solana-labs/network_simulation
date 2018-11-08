@@ -15,14 +15,14 @@
 ######################################
 
 import random
-random.seed(111)
+random.seed(11)
 import numpy as np
-np.random.seed(111)
+np.random.seed(11)
 import pandas as pd
-import hashlib
-#from graphviz import Digraph
-import pygraphviz as pgv
+
 from collections import Counter
+
+import hashlib
 
 from IPython.core.debugger import set_trace
 
@@ -33,13 +33,13 @@ logging.basicConfig(filename='global.log',filemode = 'w', level=logging.DEBUG)
 ########################
 ## Lockout Function
 ########################
-MIN_LOCKOUT = 2 ## TMP: unit is slot, to be PoH?
+MIN_LOCKOUT = 0 ## TMP: unit is slot, to be PoH?
 MAX_LOCKOUT = 20736000 ## ~4 months in slot time (2 slots / second)
 
 def calc_lockout_time(current_time, prev_vote_time, k = 1, base = 2,
                       min_lockout = MIN_LOCKOUT, max_lockout = MAX_LOCKOUT):
 
-    z = (current_time - prev_vote_time) / k
+    z = (current_time - prev_vote_time) / (1.*k)
     exp_z = k * (base ** (z + 1))
     lockout_time = int(min_lockout + exp_z)
 
@@ -123,7 +123,7 @@ class Network():
         ## TODO: partitioned nodes not currently separate network
         ##       they just miss any broadcasts currently
 
-        
+
         ## PLACEHOLDER: set active set
         self.active_set = len(self.nodes)
         
@@ -250,9 +250,9 @@ class Node():
         
         ## if I have any blocks that aren't in leader's block chain,
         ## leader is broadcasting a branch
-        on_same_branch = all([node_block in leader_hash_chain.values() for node_block in node_block_hashes])
+        #on_same_branch = all([node_block in leader_hash_chain.values() for node_block in node_block_hashes])
+        on_same_branch = set(node_block_hashes).issubset(leader_hash_chain.values())
 
-        
         if not on_same_branch:
 
             ## what is Node's maximum lockout on earliest
@@ -274,6 +274,7 @@ class Node():
                 ## re-write / fill in blocks from cache
                 ## Keep track of depth of rollback (E&M)
                 ## TODO: how to update lockouts?
+
                 rollback_times = []
                 for t in self.chain.keys():
 
@@ -330,7 +331,7 @@ class Node():
 
             ## find last non-virtual node block
             last_node_block_slot = max(self.chain.keys())
-
+            
             while self.chain[last_node_block_slot] == 0: 
                 last_node_block_slot -= 1
             last_node_block_slot += 1
@@ -371,11 +372,12 @@ class Node():
         ## run through votes (blocks), re-calc lockouts with current time
         ## re-writing lockouts entirely out of laziness
         ## could deal with rollbacks much better
+
         self.lockouts = {}
         for block_hash in self.chain.values():
             if block_hash == 0: continue
             block_time = self.received[block_hash].block_time
-            self.lockouts[block_hash] = time + calc_lockout_time(time, block_time, k = 1.5)
+            self.lockouts[block_hash] = time + calc_lockout_time(time, block_time, k = 2)
         
 
     def get_branch_split_time(self, current_block, time):
@@ -410,11 +412,12 @@ class Node():
         ## i.e. find first slot where two block histories differ
         branch_time = -1
         for i in range(prev_block_time+1):
-            if node_block_hashes[i] != current_block_hashes[i] and node_block_hashes[i] != 0:
+            #if node_block_hashes[i] != current_block_hashes[i] and node_block_hashes[i] != 0:
+            if node_block_hashes[i] != current_block_hashes[i]:
                 branch_time = i
                 break
         return branch_time
-            
+
     def get_current_lockout(self, branch_time):
 
         ## returns time when lockout on current branch expires
@@ -424,13 +427,29 @@ class Node():
         ## lockout alg:
         ## - find earliest (lowest PoH) block in Node chain not included in block transmission
         ## - if lockout from that block is <= (=?) current block slot (PoH) vote on currrent chain
+
+        ## branch_time is earliest slot that differs
+        ## might be virtual block w/out lockout
+        ## roll forward until 
+
+        ## get all lockouts, return max
         
-        ## TODO: validate lockout 
-        if branch_time < 0:
+        branch_slots = {k:v for k,v in self.chain.iteritems() if k >= branch_time}
+
+        lockouts = [0]
+        for branch_time in branch_slots:
+            if self.chain[branch_time] == 0:
+                continue
+            else:
+                lockouts.append(self.lockouts[self.chain[branch_time]])
+
+        return max(lockouts)
+#        ## TODO: validate lockout 
+#        if branch_time < 0:
             ## same branch, no lockout
-            return 0
-        else:
-            return self.lockouts[self.chain[branch_time]]
+#            return 0
+ #       else:
+  #          return self.lockouts[self.chain[branch_time]]
 
     ## Node::tick
     def tick(self, _time):
@@ -478,70 +497,4 @@ class Node():
 
             ## TODO: does leader receive now?
             ## self.receive_block(new_block, _time)
-
-class NetworkStatus():
-
-    def print_snapshot(self, snapshot):
-        ## snapshot of form {validator : {slot : block}}
-        ## print tree of current network chain status
-        ## nodes show % votes
-        ## Nodes are blocks, edges time between block, labels are vote counts/% across given slot
-        
-        if snapshot.shape[0] < 2: return
-        
-        g = pgv.AGraph(strict = True, directed = True)
-
-        edge_ctr = {}
-        branch_ctr = {}
-        for col_num in range(snapshot.shape[1]):
-
-
-            cur_snapshot = snapshot[col_num]
-
-
-            ## create node ids 
-            ## node IDs should be hash of all blocks in it's history --> unique branches
-
-#            block_hashes = []
-#            for i, block in enumerate(cur_snapshot):
-#                if block == '0':
-#                    block_hashes.append('0')
-#                else:
-#                    cur_block_hash = block+'-'+'-'.join(cur_snapshot[:i])
-#                    cur_block_hash = hashlib.sha256(cur_block_hash).hexdigest()
-#                    block_hashes.append(cur_block_hash)
-
-#            cur_edges = zip(block_hashes, block_hashes[1:])
-            
-            cur_edges = zip(cur_snapshot, cur_snapshot[1:])
-
-            ## count branch
-            branch_ctr[tuple(cur_edges)] = 1 if tuple(cur_edges) not in branch_ctr else branch_ctr[tuple(cur_edges)] + 1
-            
-            for t, cur_edge in enumerate(cur_edges):
-                ##ce = ["{}... T={}".format(node[:5],t) for node in cur_edge]
-                ## converting to hex, display with slot time
-                ## hacky way to avoid self loops (e.g. 0 -> 0)
-                
-                ce = tuple(["{}... T={}".format(node[:5], t + i) for i, node in enumerate(cur_edge)])
-                if ce in edge_ctr:
-                    edge_ctr[ce] += 1
-                else:
-                    edge_ctr[ce] = 1
-
-                ## add weight label
-                ## t is key to identify time
-                g.add_edge(ce[0], ce[1], str(t),
-                           weight = edge_ctr[ce],
-                           label = "{0:.0%}".format(1.*edge_ctr[ce]/snapshot.shape[1]))
-                
-##        for e in range(len(g.edges())):
-##            g.get_edge(g.edges()[e][0],g.edges()[e][1]).attr["label"] = 1.*edge_ctr[g.get_edge(g.edges()[e][0],g.edges()[e][1])]/sum(edge_ctr.values())
-
-        ##print(g)
-
-        g.layout(prog = "dot")
-        network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0]-1)
-        g.draw(network_file_name+".png")
-
 

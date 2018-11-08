@@ -1,6 +1,5 @@
 ########################
 ## Network Sim
-## 
 ## TODO
 ## - update get_current_lockout using last *voted* block, not just block heights
 ## - pool size != network ticks
@@ -15,8 +14,12 @@
 ## - fix NetworkStatus bug due to data missing from dropouts
 ## - confirm timing alignment
 ########################
+
 import network as solana
 reload(solana)
+
+import network_status as ns
+reload(ns)
 
 from random import randint
 
@@ -25,6 +28,8 @@ from collections import Counter
 import numpy as np
 np.random.seed(11)
 from itertools import compress
+
+
 
 ## DEBUG
 from IPython.core.debugger import set_trace
@@ -37,7 +42,7 @@ import time
 POOL_SIZE = 50
 VALIDATOR_IDS = range(0, POOL_SIZE)
 AVG_LATENCY = 0 ## currently << transmission_time
-NETWORK_PARTITION = 0.1 ## tmp static partition
+NETWORK_PARTITION = 0 ## tmp static partition
 ########################
 ## Functions
 ########################
@@ -48,7 +53,7 @@ def poisson_latency(latency):
 ########################
 ## Sim
 ########################
-def run_simulation():
+def run_simulation(network_status):
     
     ## Config network
     GENESIS = solana.Block(initial_validator_set = VALIDATOR_IDS)
@@ -64,8 +69,6 @@ def run_simulation():
 
     ## Set network partition
     ## Currently static...
-
-    network_status = solana.NetworkStatus()
 
 ##    logging.info("Partitioned nodes: ",network.partition_nodes)
     ## run sim...
@@ -85,23 +88,24 @@ def run_simulation():
 
 ##        if t >= 7: set_trace()        
         network.tick()
-        network.status()
 
-##        if t >= 7: set_trace()
         network_snapshot = network.snapshot(t)
+
         network_status.print_snapshot(network_snapshot)
-        
-        
+        network_status.update_status(network_snapshot)
+
+
     return network
 
 
 def main():
     print("Run simulation...")
     t0 = time.time()
-    network = run_simulation()
+    network_status = ns.NetworkStatus()
+    network = run_simulation(network_status)
     t1 = time.time()
     print("Simulation time: %.2f" % (t1 - t0))
-
+    network_status.plot_unique_chains()
 
 if __name__ == '__main__':
     main()
