@@ -4,10 +4,17 @@ import pygraphviz as pgv
 
 import matplotlib.pyplot as plt
 
+from IPython.core.debugger import set_trace
+
 class NetworkStatus():
     def __init__(self):
+
         self.network_tick = []
-        self.unique_chains = []
+        ## {tick: [# of branches at depth (index)]}
+        self.unique_chains = {}
+        self.current_partition = {}
+        ## current active set
+        self.current_as = {}
         
         
     def print_snapshot(self, snapshot):
@@ -73,24 +80,52 @@ class NetworkStatus():
         network_file_name = "./figures/nwk_n{}_t{:02}".format(snapshot.shape[1],snapshot.shape[0]-1)
         g.draw(network_file_name+".png")
 
-    def update_status(self, snapshot):
+    def update_status(self, network, chain_analysis = False, print_snapshot = False):
 
-        self.network_tick.append(snapshot.shape[0]-1)
+        t = network.time        
+        snapshot = network.snapshot(t)
+        
+        if print_snapshot == True: self.print_snapshot(snapshot)
+            
+        self.network_tick.append(t)
+        
+        self.current_partition[t] = len(network.partition_nodes)
+        self.current_as[t] = len(network.nodes)
         
         ## write # of unique chains
-        unique_chains = []
-        for col_num in range(snapshot.shape[1]):
-            cur_snapshot = snapshot[col_num].to_string()
-            unique_chains.append(hashlib.sha256(cur_snapshot).hexdigest())
 
-        self.unique_chains.append(len(dict(Counter(unique_chains))))
+        if chain_analysis == True:
+            cur_chains = {}
+            for col_num in range(snapshot.shape[1]):
+                cur_snapshot = snapshot[col_num]
 
-    def plot_unique_chains(self):
+                for depth_num, block in enumerate(cur_snapshot):
+                    str_chain_depth = cur_snapshot[:depth_num+1].to_string()
+                    cur_chain_hash = hashlib.sha256(str_chain_depth).hexdigest()
+                
+                    if depth_num not in cur_chains:
+                        cur_chains[depth_num] = [cur_chain_hash]
+                    else:
+                        cur_chains[depth_num].append(cur_chain_hash)
+
+                        self.unique_chains[snapshot.shape[0]-1] = map(len,map(Counter,cur_chains.values()))
+    
+#            cur_snapshot = snapshot[col_num].to_string()
+#            unique_chains.append(hashlib.sha256(cur_snapshot).hexdigest())
+
+#        self.unique_chains.append(len(dict(Counter(unique_chains))))
+
+    def plot_branches(self):
 
         plt.ion()
-        fig, ax = plt.subplots( figsize = (5, 3) )
-        #ax.scatter(x = self.network_tick,
-        ax.plot(self.network_tick,self.unique_chains)
+        ticks = self.unique_chains.keys().sort()
+        
+        fig, axarr = plt.subplots(len(ticks), sharex=True)
+
+        for i, tick in enumerate(ticks):
+            axarr[i].scatter(range(len(self.unique_chains[tick])),self.unique_chains[tick])
+        fig.show()
+
                    
            #        marker = 'o',
            #        c = 'r',

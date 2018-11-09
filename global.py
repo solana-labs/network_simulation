@@ -42,7 +42,7 @@ import time
 POOL_SIZE = 50
 VALIDATOR_IDS = range(0, POOL_SIZE)
 AVG_LATENCY = 0 ## currently << transmission_time
-NETWORK_PARTITION = 0 ## tmp static partition
+NETWORK_PARTITION = 0.15 ## tmp static partitionb
 ########################
 ## Functions
 ########################
@@ -72,28 +72,43 @@ def run_simulation(network_status):
 
 ##    logging.info("Partitioned nodes: ",network.partition_nodes)
     ## run sim...
-    cur_partition_time = 0
+    cur_partition_time = -1
     network.partition_nodes = []
-    for t in range(POOL_SIZE):
+    long_lived_partition = False
 
+    for t in range(POOL_SIZE*2):
+
+        ## each tick, some % chance of long-lived partition
+        if long_lived_partition == False and cur_partition_time < 0:
+            long_lived_partition = np.random.uniform() < 0.05
+
+
+        
         ## generate partitions
-        if cur_partition_time == 0 :
+        if long_lived_partition == True:
             network.partition_nodes = list(compress(VALIDATOR_IDS,\
-                                                [np.random.uniform() < NETWORK_PARTITION for _ in nodes]))
-            cur_partition_time = randint(1,POOL_SIZE/5)
-        else:
-            cur_partition_time -= 1
+                                                    [np.random.uniform() < NETWORK_PARTITION for _ in nodes]))
+            cur_partition_time = randint(1,POOL_SIZE/5) ## next partition
+            long_lived_partition = False
+        
 
         print("Partition size: %s for: %s" % (len(network.partition_nodes), cur_partition_time))
+            
 
-##        if t >= 7: set_trace()        
         network.tick()
 
-        network_snapshot = network.snapshot(t)
+        do_unique_chain_analysis = ((t + 1) % 10) == 0
+        network_snapshot = network_status.update_status(network, chain_analysis = do_unique_chain_analysis, print_snapshot = False)
+        
+#        network_snapshot = network.snapshot(t)
+#        network_status.print_snapshot(network_snapshot)
 
-        network_status.print_snapshot(network_snapshot)
-        network_status.update_status(network_snapshot)
-
+                ## if time is up, reset partition nodes
+        if cur_partition_time <= 0:
+            network.partition_nodes = []
+            cur_partition_time = -1
+        else:
+            cur_partition_time -= 1
 
     return network
 
@@ -105,7 +120,11 @@ def main():
     network = run_simulation(network_status)
     t1 = time.time()
     print("Simulation time: %.2f" % (t1 - t0))
-    network_status.plot_unique_chains()
+    set_trace()
+    network_status.plot_branches()
+
+        
+##    network_status.plot_unique_chains()
 
 if __name__ == '__main__':
     main()

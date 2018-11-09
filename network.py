@@ -455,7 +455,7 @@ class Node():
     def tick(self, _time):
 
         ## leader:
-        if self.network.round_robin[_time] == self.id:
+        if self.network.round_robin[_time % len(self.network.nodes)] == self.id:
 
             logging.debug("I'm the leader! Node: %s at time: %s" % (self.id, _time))
 
