@@ -97,7 +97,7 @@ def run_simulation(network_status):
 
         network.tick()
 
-        do_unique_chain_analysis = ((t + 1) % 10) == 0
+        do_unique_chain_analysis = ((t + 1) % 25) == 0
         network_snapshot = network_status.update_status(network, chain_analysis = do_unique_chain_analysis, print_snapshot = False)
         
 #        network_snapshot = network.snapshot(t)

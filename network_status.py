@@ -118,12 +118,15 @@ class NetworkStatus():
     def plot_branches(self):
 
         plt.ion()
-        ticks = self.unique_chains.keys().sort()
+        ticks = self.unique_chains.keys()
+        ticks.sort()
         
-        fig, axarr = plt.subplots(len(ticks), sharex=True)
+        fig, axarr = plt.subplots(2,len(ticks), sharex=True, figsize = (24, 12.8))
 
         for i, tick in enumerate(ticks):
-            axarr[i].scatter(range(len(self.unique_chains[tick])),self.unique_chains[tick])
+            axarr[0][i].scatter(range(len(self.unique_chains[tick])), self.unique_chains[tick])
+            ## other plot
+            axarr[1][i].scatter(range(len(self.unique_chains[tick])), self.current_partition.values()[:(tick+1)])
         fig.show()
 
                    
